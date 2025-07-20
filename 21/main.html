@@ -1,0 +1,266 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>HypoGuard - Dashboard</title>
+  <link href="https://fonts.googleapis.com/css2?family=Poppins&display=swap" rel="stylesheet"/>
+  <!-- EmailJS SDK -->
+  <script src="https://cdn.jsdelivr.net/npm/emailjs-com@3/dist/email.min.js"></script>
+  <script>
+  // Initialize EmailJS with your Public Key
+  emailjs.init("Wn1o-CSI8C1EW8IBq");
+  </script>
+
+  <style>
+    * { box-sizing: border-box; }
+    body {
+      font-family: 'Poppins', sans-serif;
+      background: linear-gradient(to right, #e0eafc, #cfdef3);
+      margin: 0; padding: 0; color: #333;
+    }
+    .container {
+      max-width: 900px;
+      margin: 40px auto;
+      background: white;
+      padding: 40px;
+      border-radius: 20px;
+      box-shadow: 0 8px 30px rgba(0, 0, 0, 0.1);
+    }
+    h1 {
+      text-align: center;
+      color: #2f2f2f;
+      margin-bottom: 30px;
+    }
+    label {
+      font-weight: 600;
+      margin-top: 15px;
+      display: block;
+    }
+    input, select {
+      width: 100%;
+      padding: 12px;
+      margin-top: 5px;
+      border: 1px solid #ccc;
+      border-radius: 10px;
+      font-size: 16px;
+    }
+    button {
+      margin-top: 25px;
+      padding: 12px;
+      width: 100%;
+      font-size: 16px;
+      background: #4e73df;
+      color: white;
+      border: none;
+      border-radius: 10px;
+      cursor: pointer;
+      transition: 0.3s;
+    }
+    button:hover { background: #3b5cb8; }
+    #status {
+      margin-top: 15px;
+      font-weight: bold;
+      color: #008000;
+    }
+    #logList {
+      margin-top: 30px;
+      max-height: 300px;
+      overflow-y: auto;
+      background: #f7f9fc;
+      padding: 20px;
+      border-radius: 10px;
+      border: 1px solid #ddd;
+    }
+    .log {
+      padding: 10px;
+      border-left: 4px solid #4e73df;
+      margin-bottom: 15px;
+      background: #fff;
+      border-radius: 6px;
+      box-shadow: 0 1px 4px rgba(0, 0, 0, 0.05);
+    }
+    .top-bar {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 30px;
+    }
+    .logout-btn {
+      background-color: #dc3545;
+      color: white;
+      padding: 10px 16px;
+      border: none;
+      border-radius: 8px;
+      cursor: pointer;
+      font-size: 14px;
+    }
+    .logout-btn:hover { background-color: #b52d38; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="top-bar">
+      <h1>🛡️ HypoGuard Dashboard</h1>
+      <button class="logout-btn" onclick="logout()">Logout</button>
+    </div>
+
+    <label for="heartRate">Heart Rate (bpm):</label>
+    <input id="heartRate" type="number" value="45" />
+
+    <label for="sugar">Blood Sugar (mg/dL):</label>
+    <input id="sugar" type="number" value="250" />
+
+    <label for="bp">Blood Pressure (mmHg):</label>
+    <input id="bp" type="number" value="60" />
+
+    <label for="vitalFilter">Filter Logs by Vital:</label>
+    <select id="vitalFilter" onchange="loadLogs()">
+      <option value="">All</option>
+      <option value="Heart Rate">Heart Rate</option>
+      <option value="Blood Sugar">Blood Sugar</option>
+      <option value="Blood Pressure">Blood Pressure</option>
+    </select>
+
+    <button onclick="checkVitals()">Check Vitals</button>
+
+    <p id="status"></p>
+
+    <h2 style="margin-top:40px;">Emergency History</h2>
+    <div id="logList">Logs will appear here...</div>
+  </div>
+
+  <audio id="siren" src="https://actions.google.com/sounds/v1/emergency/police_siren_short.ogg" preload="auto"></audio>
+
+  <script type="module">
+    import { initializeApp } from "https://www.gstatic.com/firebasejs/9.22.2/firebase-app.js";
+    import { getAuth, onAuthStateChanged, signOut } from "https://www.gstatic.com/firebasejs/9.22.2/firebase-auth.js";
+    import { getFirestore, collection, addDoc, query, orderBy, where, getDocs } from "https://www.gstatic.com/firebasejs/9.22.2/firebase-firestore.js";
+
+    const firebaseConfig = {
+      apiKey: "AIzaSyAaUllgpDCWz6Ar7wuzXp4-1l1xcpExdbQ",
+      authDomain: "hypogard.firebaseapp.com",
+      projectId: "hypogard",
+      storageBucket: "hypogard.appspot.com",
+      messagingSenderId: "612215591049",
+      appId: "1:612215591049:web:174e5d2c0bd73704c3f658"
+    };
+
+    const app = initializeApp(firebaseConfig);
+    const auth = getAuth(app);
+    const db = getFirestore(app);
+
+    let currentUserEmail = "";
+    let userLocation = "";
+
+    navigator.geolocation.getCurrentPosition(
+      (pos) => {
+        const lat = pos.coords.latitude;
+        const lng = pos.coords.longitude;
+        userLocation = `https://www.google.com/maps?q=${lat},${lng}`;
+      },
+      (err) => {
+        console.warn("Location access denied or unavailable.");
+      }
+    );
+
+    onAuthStateChanged(auth, user => {
+      if (user) {
+        currentUserEmail = user.email;
+        loadLogs();
+        setInterval(loadLogs, 10000);
+      } else {
+        window.location.href = "login.html";
+      }
+    });
+
+    async function checkVitals() {
+      const heartRate = parseInt(document.getElementById("heartRate").value);
+      const sugar = parseInt(document.getElementById("sugar").value);
+      const bp = parseInt(document.getElementById("bp").value);
+      const issues = [];
+      if (heartRate < 50 || heartRate > 120) issues.push("Heart Rate");
+      if (sugar < 70 || sugar > 180) issues.push("Blood Sugar");
+      if (bp < 70 || bp > 130) issues.push("Blood Pressure");
+
+      if (issues.length > 0) {
+        const msg = `Abnormal vitals: ${issues.join(", ")}`;
+        speak(msg);
+        try {
+          await document.getElementById("siren").play();
+        } catch (err) {
+          console.warn("Siren playback failed:", err);
+        }
+        document.getElementById("status").innerText = "Emergency! Notifying caregiver...";
+        sendEmail(msg, heartRate, bp, sugar);
+        await logToFirebase(heartRate, sugar, bp, msg);
+        loadLogs();
+      } else {
+        document.getElementById("status").innerText = "Vitals are normal.";
+      }
+    }
+
+    function speak(text) {
+      const utterance = new SpeechSynthesisUtterance(text);
+      window.speechSynthesis.speak(utterance);
+    }
+
+    function sendEmail(reason, heartRate, bp, sugar) {
+      emailjs.send("service_jn6pcu4", "template_bn6f18b", {
+      reason: reason,
+      heart_rate: heartRate,
+      blood_pressure: bp,
+      sugar_level: sugar,
+      location: userLocation,
+      to_email: currentUserEmail
+       })
+       .then(() => {
+             console.log("Email sent!");
+           })
+      .catch(err => console.error("Email failed:", err));
+    }
+
+    async function logToFirebase(hr, sugar, bp, reason) {
+      try {
+        await addDoc(collection(db, "logs"), {
+          email: currentUserEmail,
+          heartRate: hr,
+          sugar,
+          bp,
+          reason,
+          location: userLocation,
+          timestamp: new Date()
+        });
+      } catch (e) {
+        console.error("Logging failed:", e);
+      }
+    }
+
+    async function loadLogs() {
+      const logList = document.getElementById("logList");
+      logList.innerHTML = "Loading...";
+      const filter = document.getElementById("vitalFilter").value;
+      const q = query(
+        collection(db, "logs"),
+        where("email", "==", currentUserEmail),
+        orderBy("timestamp", "desc")
+      );
+      const querySnapshot = await getDocs(q);
+      let logs = "";
+      querySnapshot.forEach(doc => {
+        const d = doc.data();
+        const vitalMatch = !filter || d.reason.includes(filter);
+        const time = d.timestamp?.toDate?.() || new Date();
+        if (vitalMatch) {
+          logs += `<p><strong>${time.toLocaleString()}</strong><br>HR: ${d.heartRate}, Sugar: ${d.sugar}, BP: ${d.bp}<br>Reason: ${d.reason}<br><a href='${d.location}' target='_blank'>Location</a></p><hr>`;
+        }
+      });
+      logList.innerHTML = logs || "No logs found.";
+    }
+
+    window.checkVitals = checkVitals;
+    window.loadLogs = loadLogs;
+    window.logout = () => signOut(auth);
+  </script>
+</body>
+</html>
